@@ -1,0 +1,352 @@
+import streamlit as st
+import pandas as pd
+import networkx as nx
+from pyvis.network import Network
+import tempfile
+import os
+from sqlalchemy import create_engine
+import psycopg2
+from streamlit_agraph import agraph, Node, Edge, Config
+
+# Basic Authentication
+def check_auth():
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    
+    if not st.session_state.authenticated:
+        st.title("🔐 Knowledge Graph Access")
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Login")
+            
+            if submitted:
+                # Replace with your actual credentials
+                if username == "your_username" and password == "your_password":
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("Invalid credentials")
+        return False
+    return True
+
+# LLM Configuration
+LLM_API_URL = "https://your-llm-endpoint.com/v1/chat/completions"
+LLM_USERNAME = "your_username_here"  # Replace with actual username
+LLM_PASSWORD = "your_password_here"  # Replace with actual password
+
+def query_llm(question, context_data):
+    """
+    LLM query function using basic auth
+    """
+    try:
+        import requests
+        from requests.auth import HTTPBasicAuth
+        
+        # Format context for your LLM including chat history
+        context_text = f"""
+        Knowledge Graph Context:
+        - Selected Node: {context_data['selected_node']}
+        - Connected Nodes: {context_data['connected_nodes']}
+        - Direction: {context_data['direction']}
+        - Total Nodes: {context_data['total_nodes']}
+        - Total Edges: {context_data['total_edges']}
+        
+        Chat History:
+        {format_chat_history(context_data.get('chat_history', []))}
+        
+        Current Question: {question}
+        """
+        
+        # Prepare the request payload
+        payload = {
+            "messages": [
+                {"role": "user", "content": context_text}
+            ]
+        }
+        
+        # Make the API call with basic auth
+        response = requests.post(
+            LLM_API_URL,
+            json=payload,
+            auth=HTTPBasicAuth(LLM_USERNAME, LLM_PASSWORD),
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("choices", [{}])[0].get("message", {}).get("content", "No response received")
+        else:
+            return f"LLM API Error: {response.status_code} - {response.text}"
+        
+    except Exception as e:
+        return f"LLM query failed: {str(e)}"
+
+def format_chat_history(chat_history):
+    """Format chat history for LLM context"""
+    if not chat_history:
+        return "No previous conversation."
+    
+    formatted = []
+    for role, message in chat_history[-5:]:  # Last 5 messages
+        formatted.append(f"{role.title()}: {message}")
+    return "\n".join(formatted)
+
+# Database Connection (keep your existing function)
+@st.cache_resource
+def get_connection():
+    # Add your actual database credentials
+    db_user = ""
+    db_password = ""
+    db_host = ""
+    db_port = ""
+    db_name = ""
+    
+    return psycopg2.connect(
+        dbname=db_name, user=db_user, password=db_password, host=db_host,
+        port=db_port
+    )
+
+def normalize_df(df):
+    int_cols = df.select_dtypes(include=['int64']).columns
+    df[int_cols] = df[int_cols].astype('int32')
+    
+    float_cols = df.select_dtypes(include=['float64']).columns
+    df[float_cols] = df[float_cols].astype('float32')
+    
+    return df
+
+@st.cache_data
+def load_data():
+    conn = get_connection()
+    _nodes = pd.read_sql("SELECT * FROM kg_nodes", conn)
+    _edges = pd.read_sql("SELECT * FROM kg_edges", conn)
+    
+    nodes = normalize_df(_nodes)
+    edges = normalize_df(_edges)
+    
+    return nodes, edges
+
+def build_subgraph(nodes_df, edges_df, selected_node_id, direction):
+    G = nx.DiGraph()
+    
+    # Add center node
+    center = nodes_df[nodes_df.node_id == selected_node_id].iloc[0]
+    G.add_node(
+        center.node_id,
+        label=str(center.label),
+        group=str(center.label),
+        title=f"{center['name']}"
+    )
+    
+    # Add connected nodes based on direction
+    if direction in ("Outgoing", "Both"):
+        out_edges = edges_df[edges_df.source_node_id == selected_node_id]
+        for _, row in out_edges.iterrows():
+            target = nodes_df[nodes_df.node_id == row.target_node_id]
+            if not target.empty:
+                tgt = target.iloc[0]
+                G.add_node(tgt.node_id, label=str(tgt.label), group=str(tgt.label), title=f"{tgt['name']}")
+                G.add_edge(center.node_id, tgt.node_id, label=str(row.relation_type), title=f"{tgt['name']}")
+
+    if direction in ("Incoming", "Both"):
+        in_edges = edges_df[edges_df.target_node_id == selected_node_id]
+        for _, row in in_edges.iterrows():
+            source = nodes_df[nodes_df.node_id == row.source_node_id]
+            if not source.empty:
+                src = source.iloc[0]
+                G.add_node(src.node_id, label=str(src.label), group=str(src.label), title=f"{src['name']}")
+                G.add_edge(src.node_id, center.node_id, label=str(row.relation_type), title=f"{src['name']}")
+
+    return G
+
+def create_network_viz(G):
+    net = Network(height="500px", width="100%", directed=True)
+    net.from_nx(G)
+    net.force_atlas_2based()
+    
+    # Simplified physics options
+    options = {
+        "physics": {
+            "enabled": True,
+            "forceAtlas2Based": {
+                "gravitationalConstant": -50,
+                "centralGravity": 0.01,
+                "springLength": 100,
+                "springConstant": 0.08
+            },
+            "maxVelocity": 50,
+            "solver": "forceAtlas2Based",
+            "timestep": 0.35,
+            "stabilization": {"iterations": 150}
+        }
+    }
+    net.set_options(str(options).replace("'", '"'))
+    
+    html_path = "graph.html"
+    net.save_graph(html_path)
+    return html_path
+
+def main():
+    if not check_auth():
+        return
+    
+    st.set_page_config(page_title="Knowledge Graph Explorer", layout="wide")
+    
+    st.title("🧠 Knowledge Graph Explorer")
+    st.markdown("---")
+    
+    # Load data
+    try:
+        nodes_df, edges_df = load_data()
+    except Exception as e:
+        st.error(f"Database connection failed: {str(e)}")
+        return
+    
+    # Sidebar for controls
+    with st.sidebar:
+        st.header("🎛️ Controls")
+        
+        # Node selection
+        st.subheader("Select Node")
+        node_options = sorted(nodes_df["name"].unique())
+        selected_name = st.selectbox("Choose a node:", node_options, help="Select a node to explore its connections")
+        
+        selected_node = nodes_df[nodes_df["name"] == selected_name].iloc[0]
+        selected_node_id = selected_node.node_id
+        
+        # Direction filter
+        st.subheader("Connection Direction")
+        direction = st.radio(
+            "Show edges:",
+            ["Outgoing", "Incoming", "Both"],
+            index=2,
+            help="Choose which connections to display"
+        )
+        
+        # Stats
+        st.subheader("📊 Graph Stats")
+        st.metric("Total Nodes", len(nodes_df))
+        st.metric("Total Edges", len(edges_df))
+        
+        # Connected nodes count
+        if direction == "Outgoing":
+            connected_count = len(edges_df[edges_df.source_node_id == selected_node_id])
+        elif direction == "Incoming":
+            connected_count = len(edges_df[edges_df.target_node_id == selected_node_id])
+        else:
+            connected_count = len(edges_df[
+                (edges_df.source_node_id == selected_node_id) | 
+                (edges_df.target_node_id == selected_node_id)
+            ])
+        st.metric("Connected Nodes", connected_count)
+    
+    # Main content area
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.subheader(f"🔗 Network View: {selected_name}")
+        
+        # Build and display graph
+        subgraph = build_subgraph(nodes_df, edges_df, selected_node_id, direction)
+        
+        if len(subgraph.nodes()) > 0:
+            html_file = create_network_viz(subgraph)
+            with open(html_file, "r", encoding="utf-8") as f:
+                html_content = f.read()
+            st.components.v1.html(html_content, height=520)
+        else:
+            st.info("No connections found for the selected node and direction.")
+    
+    with col2:
+        st.subheader("📋 Node Details")
+        
+        # Selected node properties
+        with st.expander("🎯 Selected Node", expanded=True):
+            if hasattr(selected_node, 'properties') and selected_node.properties:
+                try:
+                    props = eval(selected_node.properties) if isinstance(selected_node.properties, str) else selected_node.properties
+                    st.json(props)
+                except:
+                    st.write("Properties not available")
+            else:
+                st.write(f"**Name:** {selected_node['name']}")
+                st.write(f"**Label:** {selected_node.label}")
+                st.write(f"**ID:** {selected_node.node_id}")
+        
+        # Connected nodes list
+        with st.expander("🔗 Connected Nodes", expanded=True):
+            if direction in ["Outgoing", "Both"]:
+                outgoing = edges_df[edges_df.source_node_id == selected_node_id]
+                if not outgoing.empty:
+                    st.write("**Outgoing:**")
+                    for _, edge in outgoing.iterrows():
+                        target_name = nodes_df[nodes_df.node_id == edge.target_node_id]['name'].iloc[0]
+                        st.write(f"→ {target_name} ({edge.relation_type})")
+            
+            if direction in ["Incoming", "Both"]:
+                incoming = edges_df[edges_df.target_node_id == selected_node_id]
+                if not incoming.empty:
+                    st.write("**Incoming:**")
+                    for _, edge in incoming.iterrows():
+                        source_name = nodes_df[nodes_df.node_id == edge.source_node_id]['name'].iloc[0]
+                        st.write(f"← {source_name} ({edge.relation_type})")
+    
+    # LLM Query Section
+    st.markdown("---")
+    st.subheader("🤖 Chat About Your Data")
+    
+    # Initialize chat history
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
+    
+    # Clear chat button
+    if st.button("🗑️ Clear Chat"):
+        st.session_state.chat_history = []
+        st.rerun()
+    
+    # Chat display
+    chat_container = st.container()
+    with chat_container:
+        for i, (role, message) in enumerate(st.session_state.chat_history):
+            if role == "user":
+                st.markdown(f"**You:** {message}")
+            else:
+                st.markdown(f"**AI:** {message}")
+            st.markdown("---")
+    
+    # Chat input
+    with st.form("chat_form", clear_on_submit=True):
+        question = st.text_input(
+            "Ask about the knowledge graph:",
+            placeholder="e.g., 'What connects to Node A?' or 'Tell me about relationships'"
+        )
+        
+        submitted = st.form_submit_button("💬 Send", type="primary")
+        
+        if submitted and question.strip():
+            # Add user message to chat
+            st.session_state.chat_history.append(("user", question))
+            
+            with st.spinner("Thinking..."):
+                # Prepare context data including chat history
+                context_data = {
+                    "selected_node": selected_name,
+                    "connected_nodes": connected_count,
+                    "direction": direction,
+                    "total_nodes": len(nodes_df),
+                    "total_edges": len(edges_df),
+                    "chat_history": st.session_state.chat_history[:-1]  # Previous messages
+                }
+                
+                # Get LLM response
+                response = query_llm(question, context_data)
+                
+                # Add AI response to chat
+                st.session_state.chat_history.append(("ai", response))
+                
+                st.rerun()
+
+if __name__ == "__main__":
+    main()
