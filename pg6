@@ -566,19 +566,30 @@ if st.button("Send") and question.strip():
     st.session_state.chat_history.append(("user", question))
     
     with st.spinner("Thinking..."):
-        # Simplified context preparation
+        # Prepare proper context data with all needed info
         if not show_category_view and 'selected_node' in locals():
+            # Single node context - get actual relationships
+            graph_data = get_node_relationships(selected_name, nodes_df, edges_df)
             context_data = {
                 "selected_node": selected_name,
                 "nodes_df": nodes_df,
                 "edges_df": edges_df,
+                "direction": "Single Node View",
+                "total_nodes": len(nodes_df),
+                "total_edges": len(edges_df),
                 "chat_history": st.session_state.chat_history[:-1]
             }
         else:
+            # Category view context - get category relationships
+            category_label = selected_label
+            graph_data = get_category_relationships(category_label, nodes_df, edges_df)
             context_data = {
                 "selected_node": f"All nodes in '{selected_label}' category",
                 "nodes_df": nodes_df,
                 "edges_df": edges_df,
+                "direction": "Category Overview",
+                "total_nodes": len(nodes_df),
+                "total_edges": len(edges_df),
                 "chat_history": st.session_state.chat_history[:-1]
             }
         
