@@ -271,15 +271,19 @@ def query_llm(question, context_data):
         
         if response.status_code == 200:
             result = response.json()
+            
             # Handle different Llama response formats
             if isinstance(result, list) and len(result) > 0:
-                return result[0].get("generated_text", "No response received")
-            elif "generated_text" in result:
+                # Format: [{"generated_text": "..."}]
+                generated_text = result[0].get("generated_text", "")
+                if generated_text:
+                    return generated_text
+            elif isinstance(result, dict) and "generated_text" in result:
+                # Format: {"generated_text": "..."}
                 return result["generated_text"]
-            elif "choices" in result:  # Some Llama APIs use OpenAI format
-                return result.get("choices", [{}])[0].get("message", {}).get("content", "No response received")
-            else:
-                return str(result)  # Fallback to show raw response
+            
+            # If we get here, the expected format wasn't found
+            return f"Response received but couldn't extract text. Keys found: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}"
         else:
             return f"Llama API Error: {response.status_code} - {response.text}"
         
@@ -551,9 +555,9 @@ with st.container():
         if role == "user":
             st.markdown(f"**Q:** {message}")
         else:
-            # Truncate long responses
-            display_msg = message[:200] + "..." if len(message) > 200 else message
-            st.markdown(f"**A:** {display_msg}")
+            # Show full response - removed truncation
+            st.markdown(f"**A:** {message}")
+            st.markdown("---")  # Separator for readability
 
 # Compact input
 question = st.text_input("Ask about your graph:", key="chat_input")
