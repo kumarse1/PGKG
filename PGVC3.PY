@@ -344,6 +344,7 @@ if selected_name == "View All in Category":
     
     selected_node = None  # No specific node selected
     selected_node_id = None
+    direction = None  # No direction filter in category view
     
 else:
     # Original single node view
