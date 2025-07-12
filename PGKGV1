@@ -7,7 +7,6 @@ import tempfile
 import os
 from sqlalchemy import create_engine
 import psycopg2
-from streamlit_agraph import agraph, Node, Edge, Config
 
 # NEW ADDITION: LLM integration imports for chat feature
 import requests
@@ -205,14 +204,65 @@ direction = st.selectbox(
 # 🔍 Properties and Graph
 st.markdown("### Node Properties")
 
-st.json(selected_node.properties if hasattr(selected_node, 'properties') and selected_node.properties else 
-        selected_node.properties else {})
+st.json(selected_node.properties if hasattr(selected_node, 'properties') and selected_node.properties else {})
 
 st.markdown("### Graph View")
 
-html_file = build_subgraph(nodes_df, edges_df, selected_node_id, direction)
+# Build subgraph and create visualization
+subgraph = build_subgraph(nodes_df, edges_df, selected_node_id, direction)
 
-with open(html_file, "r", encoding="utf-8") as f:
+# Create network visualization (your original pyvis setup)
+net = Network(height="600px", width="100%", directed=True)
+net.from_nx(subgraph)
+net.force_atlas_2based()
+
+# Set physics options for better visualization (your original settings)
+net.set_options("""
+var options = {
+  "physics": {
+    "enabled": true,
+    "forceAtlas2Based": {
+      "gravitationalConstant": -50,
+      "centralGravity": 0.01,
+      "springLength": 100,
+      "springConstant": 0.08
+    },
+    "maxVelocity": 50,
+    "solver": "forceAtlas2Based",
+    "timestep": 0.35,
+    "stabilization": {"iterations": 150}
+  },
+  "nodes": {
+    "borderWidth": 2,
+    "size": 30,
+    "font": {
+      "size": 12,
+      "face": "Arial"
+    }
+  },
+  "edges": {
+    "arrows": {
+      "to": {
+        "enabled": true,
+        "scaleFactor": 1.2
+      }
+    },
+    "color": {
+      "inherit": false,
+      "color": "#848484"
+    },
+    "smooth": {
+      "enabled": true,
+      "type": "dynamic"
+    }
+  }
+}
+""")
+
+html_path = "graph.html"
+net.save_graph(html_path)
+
+with open(html_path, "r", encoding="utf-8") as f:
     html = f.read()
 
 # YOUR ORIGINAL HTML DISPLAY - UNCHANGED
