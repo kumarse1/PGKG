@@ -147,4 +147,89 @@ def get_node_relationships(node_name, nodes_df, edges_df, max_rel=10):
         rels.append("\nIncoming:")
         for _, e in inc.iterrows():
             src = nodes_df[nodes_df.node_id == e.source_node_id].iloc[0]
-            rels.append(f"
+            rels.append(f"  ← {src.name} ({src.label}) via '{e.relation_type}'")
+    return "\n".join(rels)
+
+
+def query_llm(question, context_data):
+    graph_data = context_data.get("graph_data", "No graph data.")
+    ctx = f"""
+You are analyzing a Knowledge Graph.
+
+Graph Data:
+{graph_data}
+
+Chat History:
+{format_chat_history(context_data.get('chat_history', []))}
+
+User Question: {question}
+"""
+    payload = {"inputs": ctx, "parameters": {"max_new_tokens": 500, "temperature": 0.3}}
+    resp = requests.post(
+        LLM_API_URL, json=payload,
+        auth=HTTPBasicAuth(LLM_USERNAME, LLM_PASSWORD),
+        headers={"Content-Type": "application/json"}, timeout=30
+    )
+    if resp.ok:
+        res = resp.json()
+        if isinstance(res, list) and res:
+            return res[0].get("generated_text", "")
+        if isinstance(res, dict) and "generated_text" in res:
+            return res.get("generated_text", "")
+        return f"Unexpected format: {res.keys()}"
+    return f"LLM Error {resp.status_code}: {resp.text}"
+
+# Main App
+st.set_page_config(page_title="KG Explorer", layout="wide")
+st.title("Knowledge Graph Explorer")
+nodes_df, edges_df = load_data()
+
+# Category & Node Selection
+labels = sorted(nodes_df.label.dropna().unique())
+sel_label = st.selectbox("Select Category", labels)
+filt = nodes_df[nodes_df.label == sel_label]
+node_opts = ["All"] + sorted(filt.name.unique())
+sel_node = st.selectbox("Select Node", node_opts)
+is_cat = sel_node == "All"
+
+def show_graph(center_ids, title):
+    st.markdown(title)
+    G = build_graph(nodes_df, edges_df, center_ids)
+    render_pyvis(G, DEFAULT_PYVIS_OPTIONS)
+
+if is_cat:
+    show_graph(filt.node_id.tolist(), f"### {sel_label} Overview")
+else:
+    node = filt[filt.name == sel_node].iloc[0]
+    st.markdown("### Node Properties")
+    st.json(node.properties if hasattr(node, 'properties') else {})
+    dir_opt = st.selectbox("Connection Direction", ["Both", "Outgoing", "Incoming"])
+    show_graph([node.node_id], f"### {sel_node} ({dir_opt})")
+
+# Chat Interface
+st.markdown("---")
+col1, col2 = st.columns([3, 1])
+with col1:
+    st.markdown("### Chat")
+with col2:
+    if st.button("Clear Chat"):
+        st.session_state.chat_history = []
+
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+
+for role, msg in st.session_state.chat_history[-8:]:
+    prefix = "Q:" if role == 'user' else "A:"
+    st.markdown(f"**{prefix}** {msg}")
+    st.markdown("---")
+
+query = st.text_input("Ask about your graph:")
+if st.button("Send") and query.strip():
+    st.session_state.chat_history.append(("user", query))
+    graph_data = get_node_relationships(query, nodes_df, edges_df)
+    ctx = {"graph_data": graph_data, "chat_history": st.session_state.chat_history[:-1]}
+    answer = query_llm(query, ctx)
+    st.session_state.chat_history.append(("ai", answer))
+    st.rerun()
+
+# Total lines: ~130
