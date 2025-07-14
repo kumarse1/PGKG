@@ -210,12 +210,11 @@ def show_graph(center_ids, title):
     render_pyvis(G, DEFAULT_PYVIS_OPTIONS)
 
 if is_cat:
-    graph_data = "
-
-".join([
+    graph_data = "\n\n".join([
         get_node_relationships(name, nodes_df, edges_df, max_rel=3)
         for name in filt.name.head(5)
     ])
+    show_graph(filt.node_id.tolist(), f"### {sel_label} Overview")
 else:
     node = filt[filt.name == sel_node].iloc[0]
     st.markdown("### Node Properties")
@@ -225,6 +224,7 @@ else:
         else:
             st.json({k: v for k, v in node.items() if k not in ['node_id', 'label', 'name']})
     dir_opt = st.selectbox("Connection Direction", ["Both", "Outgoing", "Incoming"])
+    graph_data = get_node_relationships(sel_node, nodes_df, edges_df)
     show_graph([node.node_id], f"### {sel_node} ({dir_opt})")
 
 # Chat Interface
@@ -247,15 +247,6 @@ for role, msg in st.session_state.chat_history[-8:]:
 query = st.text_input("Ask about your graph:")
 if st.button("Send") and query.strip():
     st.session_state.chat_history.append(("user", query))
-    if is_cat:
-    graph_data = "
-
-".join([
-        get_node_relationships(name, nodes_df, edges_df, max_rel=3)
-        for name in filt.name.head(5)
-    ])
-else:
-    graph_data = get_node_relationships(sel_node, nodes_df, edges_df)
     ctx = {"graph_data": graph_data, "chat_history": st.session_state.chat_history[:-1]}
     answer = query_llm(query, ctx)
     st.session_state.chat_history.append(("ai", answer))
