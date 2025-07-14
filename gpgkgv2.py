@@ -152,48 +152,40 @@ def get_node_relationships(node_name, nodes_df, edges_df, max_rel=10):
 
 
 def query_llm(question, context_data):
-    graph_data = "
+    graph_data = context_data.get("graph_data", "No graph data provided.")
+    ctx = f"""
+You are an assistant analyzing a structured Knowledge Graph. You must answer ONLY based on the information provided below from the graph.
 
-".join([
-        get_node_relationships(name, nodes_df, edges_df, max_rel=3)
-        for name in top_nodes.name.unique()
-    ])
-    show_graph(filt.node_id.tolist(), f"### {sel_label} Overview")
-else:
-    node = filt[filt.name == sel_node].iloc[0]
-    st.markdown("### Node Properties")
-    with st.expander("Show Node Properties"):
-        if show_props:
-            st.json(dict(node))
-        else:
-            st.json({k: v for k, v in node.items() if k not in ['node_id', 'label', 'name']})
-    dir_opt = st.selectbox("Connection Direction", ["Both", "Outgoing", "Incoming"])
-    graph_data = get_node_relationships(sel_node, nodes_df, edges_df)
-    show_graph([node.node_id], f"### {sel_node} ({dir_opt})")
+If the user's question cannot be answered using this data, respond with:
+"This information is not available in the current knowledge graph."
 
-# Chat Interface
-st.markdown("---")
-col1, col2 = st.columns([3, 1])
-with col1:
-    st.markdown("### Chat")
-with col2:
-    if st.button("Clear Chat"):
-        st.session_state.chat_history = []
+=== EXAMPLE ===
+Q: What applications are connected to PostgreSQL?
+A: In your knowledge graph, PostgreSQL is connected to Application A and Application B via 'used_by'.
 
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
+Q: What is the birthday of Albert Einstein?
+A: This information is not available in the current knowledge graph.
 
-for role, msg in st.session_state.chat_history[-8:]:
-    prefix = "Q:" if role == 'user' else "A:"
-    st.markdown(f"**{prefix}** {msg}")
-    st.markdown("---")
+=== KNOWLEDGE GRAPH CONTEXT ===
+{graph_data}
 
-query = st.text_input("Ask about your graph:")
-if st.button("Send") and query.strip():
-    st.session_state.chat_history.append(("user", query))
-    ctx = {"graph_data": graph_data, "chat_history": st.session_state.chat_history[:-1]}
-    answer = query_llm(query, ctx)
-    st.session_state.chat_history.append(("ai", answer))
-    st.rerun()
+=== CHAT HISTORY ===
+{format_chat_history(context_data.get('chat_history', []))}
 
-# Total lines: ~130
+=== USER QUESTION ===
+{question}
+"""
+    payload = {"inputs": ctx, "parameters": {"max_new_tokens": 500, "temperature": 0.3}}
+    resp = requests.post(
+        LLM_API_URL, json=payload,
+        auth=HTTPBasicAuth(LLM_USERNAME, LLM_PASSWORD),
+        headers={"Content-Type": "application/json"}, timeout=30
+    )
+    if resp.ok:
+        res = resp.json()
+        if isinstance(res, list) and res:
+            return res[0].get("generated_text", "")
+        if isinstance(res, dict) and "generated_text" in res:
+            return res.get("generated_text", "")
+        return f"Unexpected format: {res.keys()}"
+    return f"LLM Error {resp.status_code}: {resp.text}"
