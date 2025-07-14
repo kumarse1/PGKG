@@ -189,3 +189,66 @@ A: This information is not available in the current knowledge graph.
             return res.get("generated_text", "")
         return f"Unexpected format: {res.keys()}"
     return f"LLM Error {resp.status_code}: {resp.text}"
+
+# --- Streamlit App Interface ---
+st.set_page_config(page_title="Knowledge Graph Explorer", layout="wide")
+st.title("Knowledge Graph Explorer")
+
+try:
+    nodes_df, edges_df = load_data()
+except Exception as e:
+    st.error(f"Database connection failed: {e}")
+    st.stop()
+
+labels = sorted(nodes_df["label"].dropna().unique())
+selected_label = st.selectbox("Select Category", labels)
+
+filtered_nodes = nodes_df[nodes_df.label == selected_label]
+node_options = ["All"] + sorted(filtered_nodes["name"].unique())
+selected_node = st.selectbox("Select Node", node_options)
+
+is_cat_view = selected_node == "All"
+
+node_sample_size = st.slider("Number of nodes for LLM context", 5, 50, 15)
+strategy = st.selectbox("Sampling strategy", ["First N", "Most Connected"])
+
+if strategy == "Most Connected":
+    connected_counts = edges_df['source_node_id'].value_counts() + edges_df['target_node_id'].value_counts()
+    top_ids = connected_counts.sort_values(ascending=False).head(node_sample_size).index
+    sample_nodes = nodes_df[nodes_df.node_id.isin(top_ids)]
+else:
+    sample_nodes = nodes_df.head(node_sample_size)
+
+graph_data = "\n\n".join([
+    get_node_relationships(row["name"], nodes_df, edges_df, max_rel=5)
+    for _, row in sample_nodes.iterrows()
+])
+
+if is_cat_view:
+    G = build_graph(nodes_df, edges_df, filtered_nodes["node_id"], direction="Both")
+else:
+    node_row = filtered_nodes[filtered_nodes["name"] == selected_node].iloc[0]
+    direction = st.selectbox("Connection Direction", ["Both", "Outgoing", "Incoming"])
+    G = build_graph(nodes_df, edges_df, [node_row.node_id], direction=direction)
+
+render_pyvis(G, DEFAULT_PYVIS_OPTIONS)
+
+# --- Chat Interface ---
+st.markdown("### Ask a question about the graph")
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+
+for role, msg in st.session_state.chat_history[-5:]:
+    st.markdown(f"**{role.capitalize()}:** {msg}")
+
+query = st.text_input("Your question")
+if st.button("Send") and query.strip():
+    st.session_state.chat_history.append(("user", query))
+    with st.spinner("Thinking..."):
+        ctx = {
+            "graph_data": graph_data,
+            "chat_history": st.session_state.chat_history[:-1]
+        }
+        answer = query_llm(query, ctx)
+    st.session_state.chat_history.append(("assistant", answer))
+    st.rerun()
