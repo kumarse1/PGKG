@@ -167,6 +167,12 @@ Q: What is the birthday of Albert Einstein?
 A: This information is not available in the current knowledge graph.
 
 === KNOWLEDGE GRAPH CONTEXT ===
+{graph_data}
+
+=== CHAT HISTORY ===
+{format_chat_history(context_data.get('chat_history', []))}
+
+=== USER QUESTION ===
 {question}
 """
     payload = {"inputs": ctx, "parameters": {"max_new_tokens": 500, "temperature": 0.3}}
@@ -204,7 +210,12 @@ def show_graph(center_ids, title):
     render_pyvis(G, DEFAULT_PYVIS_OPTIONS)
 
 if is_cat:
-    show_graph(filt.node_id.tolist(), f"### {sel_label} Overview")
+    graph_data = "
+
+".join([
+        get_node_relationships(name, nodes_df, edges_df, max_rel=3)
+        for name in filt.name.head(5)
+    ])
 else:
     node = filt[filt.name == sel_node].iloc[0]
     st.markdown("### Node Properties")
