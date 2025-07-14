@@ -152,67 +152,11 @@ def get_node_relationships(node_name, nodes_df, edges_df, max_rel=10):
 
 
 def query_llm(question, context_data):
-    graph_data = context_data.get("graph_data", "No graph data.")
-    ctx = f"""
-You are an assistant analyzing a structured Knowledge Graph. You must answer ONLY based on the information provided below from the graph.
+    graph_data = "
 
-If the user's question cannot be answered using this data, respond with:
-"This information is not available in the current knowledge graph."
-
-=== EXAMPLE ===
-Q: What applications are connected to PostgreSQL?
-A: In your knowledge graph, PostgreSQL is connected to Application A and Application B via 'used_by'.
-
-Q: What is the birthday of Albert Einstein?
-A: This information is not available in the current knowledge graph.
-
-=== KNOWLEDGE GRAPH CONTEXT ===
-{graph_data}
-
-=== CHAT HISTORY ===
-{format_chat_history(context_data.get('chat_history', []))}
-
-=== USER QUESTION ===
-{question}
-"""
-    payload = {"inputs": ctx, "parameters": {"max_new_tokens": 500, "temperature": 0.3}}
-    resp = requests.post(
-        LLM_API_URL, json=payload,
-        auth=HTTPBasicAuth(LLM_USERNAME, LLM_PASSWORD),
-        headers={"Content-Type": "application/json"}, timeout=30
-    )
-    if resp.ok:
-        res = resp.json()
-        if isinstance(res, list) and res:
-            return res[0].get("generated_text", "")
-        if isinstance(res, dict) and "generated_text" in res:
-            return res.get("generated_text", "")
-        return f"Unexpected format: {res.keys()}"
-    return f"LLM Error {resp.status_code}: {resp.text}"
-
-# Main App
-st.set_page_config(page_title="KG Explorer", layout="wide")
-st.title("Knowledge Graph Explorer")
-nodes_df, edges_df = load_data()
-
-# Category & Node Selection
-labels = sorted(nodes_df.label.dropna().unique())
-sel_label = st.selectbox("Select Category", labels)
-show_props = st.checkbox("Show full node metadata", value=False)
-filt = nodes_df[nodes_df.label == sel_label]
-node_opts = ["All"] + sorted(filt.name.unique())
-sel_node = st.selectbox("Select Node", node_opts)
-is_cat = sel_node == "All"
-
-def show_graph(center_ids, title):
-    st.markdown(title)
-    G = build_graph(nodes_df, edges_df, center_ids)
-    render_pyvis(G, DEFAULT_PYVIS_OPTIONS)
-
-if is_cat:
-    graph_data = "\n\n".join([
+".join([
         get_node_relationships(name, nodes_df, edges_df, max_rel=3)
-        for name in filt.name.head(5)
+        for name in top_nodes.name.unique()
     ])
     show_graph(filt.node_id.tolist(), f"### {sel_label} Overview")
 else:
